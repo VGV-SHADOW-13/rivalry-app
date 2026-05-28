@@ -1,6 +1,19 @@
 import { useState, useEffect, useRef } from "react";
+import { initializeApp } from "firebase/app";
+import { getFirestore, doc, setDoc, onSnapshot } from "firebase/firestore";
 
-const STORAGE_KEY = "rivalry-app-data-v1";
+const firebaseConfig = {
+  apiKey: "AIzaSyCKYJ9h-YbW-KpztJblsfAcF9NMNAA-s8Q",
+  authDomain: "rivalry-app-4060c.firebaseapp.com",
+  projectId: "rivalry-app-4060c",
+  storageBucket: "rivalry-app-4060c.firebasestorage.app",
+  messagingSenderId: "955000103805",
+  appId: "1:955000103805:web:f642374c6f4275a7a4a214",
+  measurementId: "G-EPJYVGK71K"
+};
+
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp);
 
 const DEFAULT_TASKS = [
   { id: "t1", name: "Morning Run", category: "workout", unit: "km", defaultValue: 5, points: 10 },
@@ -41,57 +54,56 @@ function initPlayerState(tasks) {
   }, {});
 }
 
-function loadData() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {}
-  return null;
-}
-
-function saveToStorage(data) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch (e) {
-    console.error("Save failed", e);
-  }
-}
-
 function buildInitialData() {
   const today = getTodayKey();
   return {
     tasks: DEFAULT_TASKS,
     names: { player1: "Player 1", player2: "Player 2" },
-    player1: {
-      totalPoints: 0,
-      history: {},
-      daily: { [today]: initPlayerState(DEFAULT_TASKS) },
-    },
-    player2: {
-      totalPoints: 0,
-      history: {},
-      daily: { [today]: initPlayerState(DEFAULT_TASKS) },
-    },
+    player1: { totalPoints: 0, history: {}, daily: { [today]: initPlayerState(DEFAULT_TASKS) } },
+    player2: { totalPoints: 0, history: {}, daily: { [today]: initPlayerState(DEFAULT_TASKS) } },
   };
 }
 
 export default function RivalryApp() {
   const [screen, setScreen] = useState("login");
   const [activeUser, setActiveUser] = useState(null);
-  const [data, setData] = useState(() => loadData() || buildInitialData());
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("today");
   const [showAddTask, setShowAddTask] = useState(false);
   const [newTask, setNewTask] = useState({ name: "", category: "custom", unit: "reps", defaultValue: 10, points: 5 });
   const [flash, setFlash] = useState(null);
-  const [names, setNames] = useState(() => (loadData()?.names) || { player1: "Player 1", player2: "Player 2" });
   const [settingName, setSettingName] = useState(false);
   const [tempName, setTempName] = useState("");
   const flashTimer = useRef(null);
+  const docRef = doc(db, "rivalry", "shared");
 
-  function saveData(newData) {
+  // Real-time listener from Firestore
+  useEffect(() => {
+    const unsub = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        setData(snap.data());
+      } else {
+        const initial = buildInitialData();
+        setDoc(docRef, initial);
+        setData(initial);
+      }
+      setLoading(false);
+    }, (err) => {
+      console.error("Firestore error:", err);
+      setData(buildInitialData());
+      setLoading(false);
+    });
+    return () => unsub();
+  }, []);
+
+  async function saveData(newData) {
     setData(newData);
-    saveToStorage(newData);
-    if (newData.names) setNames(newData.names);
+    try {
+      await setDoc(docRef, newData);
+    } catch (e) {
+      console.error("Save failed", e);
+    }
   }
 
   function showFlash(msg, type = "success") {
@@ -115,7 +127,6 @@ export default function RivalryApp() {
     const taskState = player.daily[today][taskId];
     const task = d.tasks.find((t) => t.id === taskId);
     if (!task) return;
-
     if (!taskState.completed) {
       taskState.completed = true;
       taskState.actual = taskState.target;
@@ -172,7 +183,18 @@ export default function RivalryApp() {
     showFlash("Name updated!");
   }
 
+  if (loading) {
+    return (
+      <div style={{ background: "#0a0a0a", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ color: "#ff4d4d", fontFamily: "monospace", fontSize: 18, letterSpacing: 4 }}>CONNECTING...</div>
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
   const today = getTodayKey();
+  const names = data.names || { player1: "Player 1", player2: "Player 2" };
   const p1Today = data.player1.daily[today] || initPlayerState(data.tasks);
   const p2Today = data.player2.daily[today] || initPlayerState(data.tasks);
   const meToday = activeUser === "player1" ? p1Today : p2Today;
@@ -224,7 +246,7 @@ export default function RivalryApp() {
             );
           })}
         </div>
-        <p className="pulse" style={{ color: "#333", marginTop: 60, fontSize: 11, letterSpacing: 3 }}>BOTH PLAYERS SHARE ONE DEVICE OR SYNC VIA VERCEL</p>
+        <p className="pulse" style={{ color: "#333", marginTop: 60, fontSize: 11, letterSpacing: 3 }}>🔥 LIVE SYNC — REAL TIME</p>
       </div>
     );
   }
@@ -259,6 +281,8 @@ export default function RivalryApp() {
         @keyframes slideIn { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
         .flash { animation: slideIn 0.3s ease; }
         .streak { display: inline-block; background: #1a1a0a; border: 1px solid #ffd84d33; color: #ffd84d; font-size: 11px; padding: 2px 8px; border-radius: 4px; letter-spacing: 1px; }
+        .live-dot { width: 6px; height: 6px; background: #4dff91; border-radius: 50%; display: inline-block; margin-right: 6px; animation: blink 1.5s infinite; }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
       `}</style>
 
       {flash && (
@@ -284,7 +308,7 @@ export default function RivalryApp() {
             </div>
           </div>
           <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 11, color: "#555", letterSpacing: 3, marginBottom: 4 }}>TOTAL PTS</div>
+            <div style={{ fontSize: 11, color: "#555", letterSpacing: 3, marginBottom: 4 }}><span className="live-dot"></span>LIVE</div>
             <div style={{ fontFamily: "'Black Han Sans', sans-serif", fontSize: 28, color: activeUser === "player1" ? "#ff4d4d" : "#4d9fff" }}>{meData?.totalPoints || 0}</div>
           </div>
           <div style={{ textAlign: "right" }}>
