@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, onSnapshot } from "firebase/firestore";
+import { getFirestore, doc, setDoc, onSnapshot, collection, addDoc, query, orderBy, limit } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCKYJ9h-YbW-KpztJblsfAcF9NMNAA-s8Q",
@@ -39,6 +39,8 @@ const RANKS = [
   { min: 1000, name: "Legend", icon: "👑" },
 ];
 
+const QUICK_REPLIES = ["💪 Let's go!", "🔥 GG!", "😤 I'm catching up!", "👑 I'm winning!", "😂 You're slow!", "⚔️ Challenge accepted!"];
+
 function getRank(points) {
   return [...RANKS].reverse().find((r) => points >= r.min) || RANKS[0];
 }
@@ -64,6 +66,12 @@ function buildInitialData() {
   };
 }
 
+function formatTime(ts) {
+  if (!ts) return "";
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 export default function RivalryApp() {
   const [screen, setScreen] = useState("login");
   const [activeUser, setActiveUser] = useState(null);
@@ -75,10 +83,14 @@ export default function RivalryApp() {
   const [flash, setFlash] = useState(null);
   const [settingName, setSettingName] = useState(false);
   const [tempName, setTempName] = useState("");
+  const [messages, setMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [unread, setUnread] = useState(0);
   const flashTimer = useRef(null);
+  const chatEndRef = useRef(null);
   const docRef = doc(db, "rivalry", "shared");
+  const chatRef = collection(db, "rivalry-chat");
 
-  // Real-time listener from Firestore
   useEffect(() => {
     const unsub = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
@@ -97,13 +109,41 @@ export default function RivalryApp() {
     return () => unsub();
   }, []);
 
+  useEffect(() => {
+    const q = query(chatRef, orderBy("timestamp", "asc"), limit(100));
+    const unsub = onSnapshot(q, (snap) => {
+      const msgs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setMessages(msgs);
+      if (activeTab !== "chat") {
+        setUnread(u => u + snap.docChanges().filter(c => c.type === "added").length);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "chat") {
+      setUnread(0);
+      setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+    }
+  }, [activeTab, messages]);
+
   async function saveData(newData) {
     setData(newData);
+    try { await setDoc(docRef, newData); } catch (e) { console.error("Save failed", e); }
+  }
+
+  async function sendMessage(text) {
+    if (!text.trim() || !activeUser) return;
+    setChatInput("");
     try {
-      await setDoc(docRef, newData);
-    } catch (e) {
-      console.error("Save failed", e);
-    }
+      await addDoc(chatRef, {
+        text: text.trim(),
+        sender: activeUser,
+        senderName: data?.names?.[activeUser] || activeUser,
+        timestamp: new Date(),
+      });
+    } catch (e) { console.error("Chat error", e); }
   }
 
   function showFlash(msg, type = "success") {
@@ -114,9 +154,7 @@ export default function RivalryApp() {
 
   function getOrCreateToday(playerData) {
     const today = getTodayKey();
-    if (!playerData.daily[today]) {
-      playerData.daily[today] = initPlayerState(data.tasks);
-    }
+    if (!playerData.daily[today]) playerData.daily[today] = initPlayerState(data.tasks);
     return today;
   }
 
@@ -133,6 +171,7 @@ export default function RivalryApp() {
       player.totalPoints += task.points;
       saveData(d);
       showFlash(`+${task.points} pts — ${task.name} done! 🔥`);
+      sendMessage(`🔥 Just completed: ${task.name} (+${task.points}pts)`);
     } else {
       taskState.completed = false;
       taskState.actual = 0;
@@ -208,6 +247,8 @@ export default function RivalryApp() {
   const myCompletedToday = data.tasks.filter((t) => meToday[t.id]?.completed).length;
   const theirCompletedToday = data.tasks.filter((t) => themToday[t.id]?.completed).length;
   const leading = meData && themData ? (meData.totalPoints >= themData.totalPoints ? "me" : "them") : "me";
+  const myColor = activeUser === "player1" ? "#ff4d4d" : "#4d9fff";
+  const theirColor = activeUser === "player1" ? "#4d9fff" : "#ff4d4d";
 
   if (screen === "login") {
     return (
@@ -238,7 +279,7 @@ export default function RivalryApp() {
             return (
               <button key={p} className="login-btn"
                 style={{ borderColor: p === "player1" ? "#ff4d4d" : "#4d9fff", color: p === "player1" ? "#ff4d4d" : "#4d9fff" }}
-                onClick={() => { setActiveUser(p); setScreen("app"); }}>
+                onClick={() => { setActiveUser(p); setScreen("app"); setUnread(0); }}>
                 <div style={{ fontSize: 28, marginBottom: 8 }}>{r.icon}</div>
                 <div>{names[p]}</div>
                 <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>{r.name} · {data[p].totalPoints} pts</div>
@@ -260,7 +301,7 @@ export default function RivalryApp() {
         .task-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 16px; margin-bottom: 12px; transition: border-color 0.2s; }
         .task-card:hover { border-color: #333; }
         .task-card.done { border-color: #1a3a1a; background: #0d1a0d; }
-        .tab-btn { background: transparent; border: none; color: #555; padding: 10px 20px; font-family: 'Space Mono', monospace; font-size: 13px; cursor: pointer; letter-spacing: 2px; text-transform: uppercase; border-bottom: 2px solid transparent; transition: all 0.2s; }
+        .tab-btn { background: transparent; border: none; color: #555; padding: 10px 14px; font-family: 'Space Mono', monospace; font-size: 12px; cursor: pointer; letter-spacing: 2px; text-transform: uppercase; border-bottom: 2px solid transparent; transition: all 0.2s; position: relative; }
         .tab-btn.active { color: #fff; border-bottom-color: #ff4d4d; }
         .check-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid #333; background: transparent; cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; flex-shrink: 0; }
         .check-btn.done { background: #1a3a1a; border-color: #4dff91; }
@@ -283,6 +324,18 @@ export default function RivalryApp() {
         .streak { display: inline-block; background: #1a1a0a; border: 1px solid #ffd84d33; color: #ffd84d; font-size: 11px; padding: 2px 8px; border-radius: 4px; letter-spacing: 1px; }
         .live-dot { width: 6px; height: 6px; background: #4dff91; border-radius: 50%; display: inline-block; margin-right: 6px; animation: blink 1.5s infinite; }
         @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+        .badge { position: absolute; top: 4px; right: 4px; background: #ff4d4d; color: #fff; border-radius: 50%; width: 16px; height: 16px; font-size: 10px; display: flex; align-items: center; justify-content: center; font-family: monospace; }
+        .msg-bubble { max-width: 75%; padding: 10px 14px; border-radius: 16px; font-size: 13px; line-height: 1.4; word-break: break-word; }
+        .msg-me { background: #1a0a0a; border: 1px solid #ff4d4d33; border-bottom-right-radius: 4px; }
+        .msg-them { background: #0a0a1a; border: 1px solid #4d9fff33; border-bottom-left-radius: 4px; }
+        .msg-system { background: #1a1a0a; border: 1px solid #ffd84d22; color: #ffd84d; font-size: 11px; padding: 6px 12px; border-radius: 8px; text-align: center; max-width: 100%; }
+        .quick-btn { background: transparent; border: 1px solid #333; color: #888; padding: 6px 12px; border-radius: 20px; font-family: 'Space Mono', monospace; font-size: 11px; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+        .quick-btn:hover { border-color: #ff4d4d; color: #ff4d4d; }
+        .chat-input { background: #111; border: 1px solid #333; color: #fff; padding: 12px 16px; border-radius: 24px; font-family: 'Space Mono', monospace; font-size: 13px; flex: 1; outline: none; }
+        .chat-input:focus { border-color: #ff4d4d; }
+        .send-btn { background: #ff4d4d; border: none; color: #fff; width: 44px; height: 44px; border-radius: 50%; cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; flex-shrink: 0; }
+        .send-btn:hover { background: #ff6666; transform: scale(1.05); }
+        .send-btn:disabled { background: #333; cursor: not-allowed; transform: none; }
       `}</style>
 
       {flash && (
@@ -295,13 +348,14 @@ export default function RivalryApp() {
         }}>{flash.msg}</div>
       )}
 
+      {/* Header */}
       <div style={{ background: "#0d0d0d", borderBottom: "1px solid #1e1e1e", padding: "16px 20px", position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ maxWidth: 600, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <button onClick={() => setScreen("login")} style={{ background: "transparent", border: "none", color: "#555", cursor: "pointer", fontSize: 18, padding: 0 }}>←</button>
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontFamily: "'Black Han Sans', sans-serif", fontSize: 20, color: activeUser === "player1" ? "#ff4d4d" : "#4d9fff", letterSpacing: 2 }}>{myName}</span>
+                <span style={{ fontFamily: "'Black Han Sans', sans-serif", fontSize: 20, color: myColor, letterSpacing: 2 }}>{myName}</span>
                 <button onClick={() => { setTempName(myName); setSettingName(true); }} style={{ background: "transparent", border: "none", color: "#444", cursor: "pointer", fontSize: 12 }}>✏️</button>
               </div>
               <div style={{ fontSize: 11, color: "#555", letterSpacing: 2 }}>{myRank.icon} {myRank.name}</div>
@@ -309,11 +363,11 @@ export default function RivalryApp() {
           </div>
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 11, color: "#555", letterSpacing: 3, marginBottom: 4 }}><span className="live-dot"></span>LIVE</div>
-            <div style={{ fontFamily: "'Black Han Sans', sans-serif", fontSize: 28, color: activeUser === "player1" ? "#ff4d4d" : "#4d9fff" }}>{meData?.totalPoints || 0}</div>
+            <div style={{ fontFamily: "'Black Han Sans', sans-serif", fontSize: 28, color: myColor }}>{meData?.totalPoints || 0}</div>
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontSize: 11, color: "#555", letterSpacing: 2, marginBottom: 4 }}>{theirName}</div>
-            <div style={{ fontFamily: "'Black Han Sans', sans-serif", fontSize: 22, color: activeUser === "player1" ? "#4d9fff" : "#ff4d4d" }}>{themData?.totalPoints || 0}</div>
+            <div style={{ fontFamily: "'Black Han Sans', sans-serif", fontSize: 22, color: theirColor }}>{themData?.totalPoints || 0}</div>
             <div style={{ fontSize: 11, color: "#555", letterSpacing: 1 }}>{theirRank.icon} {theirRank.name}</div>
           </div>
         </div>
@@ -329,8 +383,8 @@ export default function RivalryApp() {
                 const total = (meData.totalPoints + themData.totalPoints) || 1;
                 const myPct = (meData.totalPoints / total) * 100;
                 return <>
-                  <div style={{ width: `${myPct}%`, background: activeUser === "player1" ? "#ff4d4d" : "#4d9fff", transition: "width 0.5s" }} />
-                  <div style={{ flex: 1, background: activeUser === "player1" ? "#4d9fff" : "#ff4d4d" }} />
+                  <div style={{ width: `${myPct}%`, background: myColor, transition: "width 0.5s" }} />
+                  <div style={{ flex: 1, background: theirColor }} />
                 </>;
               })()}
             </div>
@@ -338,13 +392,19 @@ export default function RivalryApp() {
         )}
       </div>
 
+      {/* Tabs */}
       <div style={{ maxWidth: 600, margin: "0 auto", borderBottom: "1px solid #1e1e1e", display: "flex" }}>
-        {[["today", "TODAY"], ["rival", "RIVAL"], ["board", "BOARD"]].map(([id, label]) => (
-          <button key={id} className={`tab-btn ${activeTab === id ? "active" : ""}`} onClick={() => setActiveTab(id)}>{label}</button>
+        {[["today", "TODAY"], ["rival", "RIVAL"], ["board", "BOARD"], ["chat", "CHAT"]].map(([id, label]) => (
+          <button key={id} className={`tab-btn ${activeTab === id ? "active" : ""}`} onClick={() => setActiveTab(id)}>
+            {label}
+            {id === "chat" && unread > 0 && <span className="badge">{unread}</span>}
+          </button>
         ))}
       </div>
 
-      <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px" }}>
+      <div style={{ maxWidth: 600, margin: "0 auto", padding: activeTab === "chat" ? "0" : "20px 16px" }}>
+
+        {/* TODAY TAB */}
         {activeTab === "today" && (
           <>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
@@ -379,9 +439,7 @@ export default function RivalryApp() {
                             <span style={{ fontWeight: 700, fontSize: 14, textDecoration: state.completed ? "line-through" : "none", color: state.completed ? "#555" : "#fff" }}>
                               {task.name}
                             </span>
-                            <span style={{ fontSize: 11, background: c.color + "22", color: c.color, padding: "1px 6px", borderRadius: 4 }}>
-                              +{task.points}pts
-                            </span>
+                            <span style={{ fontSize: 11, background: c.color + "22", color: c.color, padding: "1px 6px", borderRadius: 4 }}>+{task.points}pts</span>
                           </div>
                           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                             <input className="input-sm" type="number" min="1" value={state.target}
@@ -409,23 +467,24 @@ export default function RivalryApp() {
           </>
         )}
 
+        {/* RIVAL TAB */}
         {activeTab === "rival" && (
           <>
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, color: "#555", letterSpacing: 3, marginBottom: 4 }}>RIVAL'S PROGRESS</div>
-              <div style={{ fontSize: 22, fontFamily: "'Black Han Sans', sans-serif", color: activeUser === "player1" ? "#4d9fff" : "#ff4d4d" }}>
+              <div style={{ fontSize: 22, fontFamily: "'Black Han Sans', sans-serif", color: theirColor }}>
                 {theirName}<span style={{ fontSize: 13, color: "#555", marginLeft: 8 }}>· {theirRank.icon} {theirRank.name}</span>
               </div>
               <div style={{ fontSize: 12, color: "#555", marginTop: 4 }}>{theirCompletedToday}/{data.tasks.length} done today · {themData?.totalPoints || 0} total pts</div>
             </div>
             <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 12, padding: 16, marginBottom: 20, display: "flex", justifyContent: "space-around", textAlign: "center" }}>
               <div>
-                <div style={{ fontSize: 28, fontFamily: "'Black Han Sans', sans-serif", color: activeUser === "player1" ? "#ff4d4d" : "#4d9fff" }}>{meData?.totalPoints || 0}</div>
+                <div style={{ fontSize: 28, fontFamily: "'Black Han Sans', sans-serif", color: myColor }}>{meData?.totalPoints || 0}</div>
                 <div style={{ fontSize: 10, color: "#555", letterSpacing: 2 }}>{myName}</div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", color: "#333", fontSize: 20 }}>VS</div>
               <div>
-                <div style={{ fontSize: 28, fontFamily: "'Black Han Sans', sans-serif", color: activeUser === "player1" ? "#4d9fff" : "#ff4d4d" }}>{themData?.totalPoints || 0}</div>
+                <div style={{ fontSize: 28, fontFamily: "'Black Han Sans', sans-serif", color: theirColor }}>{themData?.totalPoints || 0}</div>
                 <div style={{ fontSize: 10, color: "#555", letterSpacing: 2 }}>{theirName}</div>
               </div>
             </div>
@@ -455,6 +514,7 @@ export default function RivalryApp() {
           </>
         )}
 
+        {/* BOARD TAB */}
         {activeTab === "board" && (
           <>
             <div style={{ fontSize: 11, color: "#555", letterSpacing: 3, marginBottom: 20 }}>LEADERBOARD</div>
@@ -497,8 +557,66 @@ export default function RivalryApp() {
             </div>
           </>
         )}
+
+        {/* CHAT TAB */}
+        {activeTab === "chat" && (
+          <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 180px)" }}>
+            {/* Messages */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "16px", display: "flex", flexDirection: "column", gap: 10 }}>
+              {messages.length === 0 && (
+                <div style={{ textAlign: "center", color: "#333", padding: 40 }}>
+                  <div style={{ fontSize: 40, marginBottom: 12 }}>💬</div>
+                  <div style={{ letterSpacing: 2, fontSize: 12 }}>NO MESSAGES YET</div>
+                  <div style={{ fontSize: 11, color: "#222", marginTop: 8 }}>Trash talk your rival!</div>
+                </div>
+              )}
+              {messages.map((msg) => {
+                const isMe = msg.sender === activeUser;
+                const isSystem = msg.text?.startsWith("🔥");
+                if (isSystem) {
+                  return (
+                    <div key={msg.id} style={{ display: "flex", justifyContent: "center" }}>
+                      <div className="msg-system">{msg.senderName}: {msg.text}</div>
+                    </div>
+                  );
+                }
+                return (
+                  <div key={msg.id} style={{ display: "flex", flexDirection: "column", alignItems: isMe ? "flex-end" : "flex-start", gap: 4 }}>
+                    <div style={{ fontSize: 10, color: "#444", letterSpacing: 1, paddingInline: 4 }}>
+                      {msg.senderName} · {formatTime(msg.timestamp)}
+                    </div>
+                    <div className={`msg-bubble ${isMe ? "msg-me" : "msg-them"}`} style={{ color: isMe ? myColor : theirColor }}>
+                      {msg.text}
+                    </div>
+                  </div>
+                );
+              })}
+              <div ref={chatEndRef} />
+            </div>
+
+            {/* Quick replies */}
+            <div style={{ padding: "8px 16px", display: "flex", gap: 8, overflowX: "auto", borderTop: "1px solid #1a1a1a" }}>
+              {QUICK_REPLIES.map((q) => (
+                <button key={q} className="quick-btn" onClick={() => sendMessage(q)}>{q}</button>
+              ))}
+            </div>
+
+            {/* Input */}
+            <div style={{ padding: "12px 16px", borderTop: "1px solid #1a1a1a", display: "flex", gap: 10, alignItems: "center" }}>
+              <input
+                className="chat-input"
+                placeholder="Trash talk your rival..."
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && sendMessage(chatInput)}
+              />
+              <button className="send-btn" onClick={() => sendMessage(chatInput)} disabled={!chatInput.trim()}>↑</button>
+            </div>
+          </div>
+        )}
       </div>
 
+      {/* Add task modal */}
       {showAddTask && (
         <div className="modal-bg" onClick={() => setShowAddTask(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -521,6 +639,7 @@ export default function RivalryApp() {
         </div>
       )}
 
+      {/* Name modal */}
       {settingName && (
         <div className="modal-bg" onClick={() => setSettingName(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
