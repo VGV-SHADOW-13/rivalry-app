@@ -1,0 +1,85 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+
+    // ---------------- Rivalries (private to the two members) ----------------
+    match /rivalries/{rid} {
+
+      allow read: if signedIn() && request.auth.uid in resource.data.members;
+
+      // Creator starts the rivalry alone, as owner
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.members == [request.auth.uid];
+
+      allow update: if signedIn() && (memberUpdate() || joinUpdate());
+
+      // A member may change tasks / their own scores / their own name,
+      // but never touch the other player's data or the member list.
+      function memberUpdate() {
+        return request.auth.uid in resource.data.members
+          && request.resource.data.members == resource.data.members
+          && request.resource.data.ownerUid == resource.data.ownerUid
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['tasks', 'players', 'memberNames'])
+          && othersUntouched();
+      }
+
+      function othersUntouched() {
+        let m = resource.data.members;
+        let o = m[0] == request.auth.uid ? (m.size() > 1 ? m[1] : '') : m[0];
+        return o == ''
+          || (request.resource.data.players[o] == resource.data.players[o]
+              && request.resource.data.memberNames[o] == resource.data.memberNames[o]);
+      }
+
+      // A second player joins via invite link: only if there is exactly one
+      // member, the invite is still open, and they add only themselves.
+      function joinUpdate() {
+        let owner = resource.data.members[0];
+        return resource.data.members.size() == 1
+          && !(request.auth.uid in resource.data.members)
+          && request.resource.data.members == resource.data.members.concat([request.auth.uid])
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['members', 'memberNames', 'players'])
+          && request.resource.data.players[owner] == resource.data.players[owner]
+          && request.resource.data.memberNames[owner] == resource.data.memberNames[owner]
+          && get(/databases/$(database)/documents/invites/$(rid)).data.open == true;
+      }
+
+      // ---------------- Chat (members only) ----------------
+      match /messages/{mid} {
+        allow read: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/rivalries/$(rid)).data.members;
+        allow create: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/rivalries/$(rid)).data.members
+          && request.resource.data.sender == request.auth.uid;
+        allow update, delete: if false;
+      }
+    }
+
+    // ---------------- Invites (id == rivalry id, only readable by link) ----------------
+    match /invites/{rid} {
+      allow get: if signedIn();      // you need the unguessable id to read it
+      allow list: if false;          // nobody can enumerate invites
+
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.open == true
+        && getAfter(/databases/$(database)/documents/rivalries/$(rid)).data.ownerUid == request.auth.uid;
+
+      // Joiner closes the invite in the same batch that adds them to the rivalry
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['open'])
+        && request.resource.data.open == false
+        && request.auth.uid in getAfter(/databases/$(database)/documents/rivalries/$(rid)).data.members;
+    }
+
+    // Everything else (including the old shared "rivalry/shared" doc) is locked
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
