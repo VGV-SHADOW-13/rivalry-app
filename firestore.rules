@@ -16,6 +16,9 @@ service cloud.firestore {
 
       allow update: if signedIn() && (memberUpdate() || joinUpdate());
 
+      // Either player can delete the rivalry
+      allow delete: if signedIn() && request.auth.uid in resource.data.members;
+
       // A member may change tasks / their own scores / their own name,
       // but never touch the other player's data or the member list.
       function memberUpdate() {
@@ -56,7 +59,9 @@ service cloud.firestore {
         allow create: if signedIn()
           && request.auth.uid in get(/databases/$(database)/documents/rivalries/$(rid)).data.members
           && request.resource.data.sender == request.auth.uid;
-        allow update, delete: if false;
+        allow update: if false;
+        allow delete: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/rivalries/$(rid)).data.members;
       }
     }
 
@@ -69,6 +74,9 @@ service cloud.firestore {
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.open == true
         && getAfter(/databases/$(database)/documents/rivalries/$(rid)).data.ownerUid == request.auth.uid;
+
+      allow delete: if signedIn()
+        && request.auth.uid in get(/databases/$(database)/documents/rivalries/$(rid)).data.members;
 
       // Joiner closes the invite in the same batch that adds them to the rivalry
       allow update: if signedIn()
