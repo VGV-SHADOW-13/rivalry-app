@@ -241,15 +241,17 @@ const GLOBAL_CSS = `
   .danger-btn:hover:not(:disabled) { background: #ff4d4d; color: #fff; }
   .danger-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .day-pill { align-self: center; background: #151515; border: 1px solid #222; color: #777; font-size: 10px; letter-spacing: 2px; padding: 4px 12px; border-radius: 12px; text-transform: uppercase; margin: 6px 0; }
-  .credit-link { color: #888; text-decoration: none; letter-spacing: 3px; font-weight: 700; transition: color 0.2s; }
-  .credit-link:hover { color: #ff4d4d; }
+  .credit-link { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; cursor: pointer; padding: 6px 12px; border-radius: 20px; border: 1px solid #ffffff14; background: #ffffff08; transition: transform 0.2s, border-color 0.2s, background 0.2s; }
+  .credit-link:hover { transform: translateY(-1px); border-color: #dc274366; background: #dc274310; }
+  .credit-link:hover .credit-handle { text-decoration: underline; }
+  .credit-handle { font-weight: 700; letter-spacing: 1px; background: linear-gradient(90deg, #feda75, #fa7e1e, #d62976, #962fbf); -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent; }
   .link-box { background: #0d0d0d; border: 1px dashed #ff4d4d55; border-radius: 10px; padding: 12px; font-size: 11px; color: #aaa; word-break: break-all; }
   .err { color: #ff6b6b; font-size: 12px; margin: 0 0 12px; line-height: 1.4; }
   .auth-tabs { display: flex; margin-bottom: 20px; border-bottom: 1px solid #1e1e1e; }
 `;
 
 const BAR_H = 34; // live clock bar at the top
-const FOOTER_H = 44; // credit footer at the bottom
+const FOOTER_H = 96; // credit footer at the bottom
 const INSTAGRAM_URL = "https://www.instagram.com/_.vgv_shadow._";
 
 const pageStyle = { minHeight: `calc(100vh - ${BAR_H + FOOTER_H}px)`, background: "#0a0a0a", color: "#fff", fontFamily: "'Space Mono', monospace" };
@@ -280,10 +282,20 @@ function ClockBar() {
 function Footer() {
   return (
     <div style={{
-      height: FOOTER_H, background: "#070707", borderTop: "1px solid #1a1a1a", display: "flex", alignItems: "center", justifyContent: "center",
-      fontFamily: "'Space Mono', monospace", fontSize: 11,
+      height: FOOTER_H, background: "#070707", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      gap: 8, fontFamily: "'Space Mono', monospace", fontSize: 11, textAlign: "center", padding: "0 12px",
     }}>
-      <a className="credit-link" href={INSTAGRAM_URL} target="_blank" rel="noopener noreferrer">VGV SHADOW</a>
+      <div style={{ width: "min(560px, 90%)", height: 1, background: "#222", marginBottom: 6 }} />
+      <div style={{ color: "#777", lineHeight: 1.5 }}>
+        Website developed by <b style={{ color: "#aaa" }}>Varshan V G</b> · M.Sc Software Systems, PSG College of Technology
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#aaa", fontWeight: 700 }}>
+        <span>click 👉</span>
+        <a className="credit-link" href={INSTAGRAM_URL} target="_blank" rel="noopener noreferrer" aria-label="Open Varshan's Instagram">
+          <span>📸</span>
+          <span className="credit-handle">@_.vgv_shadow._</span>
+        </a>
+      </div>
     </div>
   );
 }
