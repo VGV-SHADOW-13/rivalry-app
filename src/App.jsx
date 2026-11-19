@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { Fragment, useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -13,6 +13,8 @@ import {
   getFirestore,
   doc,
   getDoc,
+  getDocs,
+  deleteDoc,
   updateDoc,
   onSnapshot,
   collection,
@@ -102,6 +104,45 @@ function formatTime(ts) {
   if (!ts) return "";
   const d = ts.toDate ? ts.toDate() : new Date(ts);
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function tsDate(ts) {
+  if (!ts) return new Date(); // message still being sent
+  return ts.toDate ? ts.toDate() : new Date(ts);
+}
+
+function dayKeyOf(ts) {
+  const d = tsDate(ts);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+// "Today", "Yesterday", or "Mon, 17 Nov 2026"
+function dayLabel(ts) {
+  const d = tsDate(ts);
+  const now = new Date();
+  const startOf = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOf(now) - startOf(d)) / 86400000);
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+}
+
+// "19 Nov, 07:48 PM"
+function formatStamp(ts) {
+  const d = tsDate(ts);
+  return `${d.toLocaleDateString([], { day: "numeric", month: "short" })}, ${formatTime(d)}`;
+}
+
+function downloadJson(filename, obj) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function tsMillis(ts) {
@@ -196,16 +237,56 @@ const GLOBAL_CSS = `
   .send-btn:disabled { background: #333; cursor: not-allowed; transform: none; }
   .rivalry-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 18px; margin-bottom: 12px; cursor: pointer; transition: border-color 0.2s, transform 0.2s; text-align: left; width: 100%; color: #fff; font-family: 'Space Mono', monospace; display: block; }
   .rivalry-card:hover { border-color: #444; transform: translateY(-1px); }
+  .danger-btn { background: transparent; border: 1px solid #ff4d4d; color: #ff4d4d; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 1px; transition: all 0.2s; width: 100%; }
+  .danger-btn:hover:not(:disabled) { background: #ff4d4d; color: #fff; }
+  .danger-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .day-pill { align-self: center; background: #151515; border: 1px solid #222; color: #777; font-size: 10px; letter-spacing: 2px; padding: 4px 12px; border-radius: 12px; text-transform: uppercase; margin: 6px 0; }
+  .credit-link { color: #888; text-decoration: none; letter-spacing: 3px; font-weight: 700; transition: color 0.2s; }
+  .credit-link:hover { color: #ff4d4d; }
   .link-box { background: #0d0d0d; border: 1px dashed #ff4d4d55; border-radius: 10px; padding: 12px; font-size: 11px; color: #aaa; word-break: break-all; }
   .err { color: #ff6b6b; font-size: 12px; margin: 0 0 12px; line-height: 1.4; }
   .auth-tabs { display: flex; margin-bottom: 20px; border-bottom: 1px solid #1e1e1e; }
 `;
 
-const pageStyle = { minHeight: "100vh", background: "#0a0a0a", color: "#fff", fontFamily: "'Space Mono', monospace" };
+const BAR_H = 34; // live clock bar at the top
+const FOOTER_H = 44; // credit footer at the bottom
+const INSTAGRAM_URL = "https://www.instagram.com/_.vgv_shadow._";
+
+const pageStyle = { minHeight: `calc(100vh - ${BAR_H + FOOTER_H}px)`, background: "#0a0a0a", color: "#fff", fontFamily: "'Space Mono', monospace" };
 const heroBg = {
   backgroundImage:
     "radial-gradient(ellipse at 20% 50%, #1a0a2e 0%, transparent 60%), radial-gradient(ellipse at 80% 20%, #0a1a2e 0%, transparent 60%)",
 };
+
+function ClockBar() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div style={{
+      position: "sticky", top: 0, zIndex: 20, height: BAR_H, background: "#070707", borderBottom: "1px solid #1a1a1a",
+      display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+      fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 1, color: "#888", padding: "0 12px", whiteSpace: "nowrap", overflow: "hidden",
+    }}>
+      <span className="live-dot" style={{ marginRight: 0 }}></span>
+      <span>{now.toLocaleDateString([], { weekday: "short", day: "numeric", month: "long", year: "numeric" })}</span>
+      <span style={{ color: "#ff4d4d", fontWeight: 700 }}>{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+    </div>
+  );
+}
+
+function Footer() {
+  return (
+    <div style={{
+      height: FOOTER_H, background: "#070707", borderTop: "1px solid #1a1a1a", display: "flex", alignItems: "center", justifyContent: "center",
+      fontFamily: "'Space Mono', monospace", fontSize: 11,
+    }}>
+      <a className="credit-link" href={INSTAGRAM_URL} target="_blank" rel="noopener noreferrer">VGV SHADOW</a>
+    </div>
+  );
+}
 
 function Logo({ small }) {
   return (
@@ -434,7 +515,7 @@ function HomeScreen({ user, myName, rivalries, onOpen, onLogout }) {
 
   return (
     <div style={{ ...pageStyle, paddingBottom: 60 }}>
-      <div style={{ background: "#0d0d0d", borderBottom: "1px solid #1e1e1e", padding: "16px 20px", position: "sticky", top: 0, zIndex: 10 }}>
+      <div style={{ background: "#0d0d0d", borderBottom: "1px solid #1e1e1e", padding: "16px 20px", position: "sticky", top: BAR_H, zIndex: 10 }}>
         <div style={{ maxWidth: 600, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ fontFamily: "'Black Han Sans', sans-serif", fontSize: 22, color: RED, letterSpacing: 4 }}>RIVALRY</div>
@@ -553,6 +634,9 @@ function RivalryView({ rivalryId, user, myName, onBack }) {
   const [newTask, setNewTask] = useState({ name: "", category: "custom", unit: "reps", defaultValue: 10, points: 5 });
   const [flash, setFlash] = useState(null);
   const [settingName, setSettingName] = useState(false);
+  const [showManage, setShowManage] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [manageBusy, setManageBusy] = useState(false);
   const [tempName, setTempName] = useState("");
   const [messages, setMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
@@ -577,9 +661,9 @@ function RivalryView({ rivalryId, user, myName, onBack }) {
   // Live chat (members only — enforced by Firestore rules)
   useEffect(() => {
     let first = true;
-    const q = query(collection(db, "rivalries", rivalryId, "messages"), orderBy("timestamp", "asc"), limit(100));
+    const q = query(collection(db, "rivalries", rivalryId, "messages"), orderBy("timestamp", "desc"), limit(300));
     const unsub = onSnapshot(q, (snap) => {
-      setMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setMessages(snap.docs.map((d) => ({ id: d.id, ...d.data() })).reverse());
       if (first) { first = false; return; }
       if (activeTabRef.current !== "chat") {
         const incoming = snap.docChanges().filter((c) => c.type === "added" && c.doc.data().sender !== uid).length;
@@ -714,6 +798,50 @@ function RivalryView({ rivalryId, user, myName, onBack }) {
     } catch (e) { console.error(e); }
   }
 
+  async function exportBackup() {
+    setManageBusy(true);
+    try {
+      const snap = await getDocs(query(collection(db, "rivalries", rivalryId, "messages"), orderBy("timestamp", "asc")));
+      const msgs = snap.docs.map((d) => {
+        const m = d.data();
+        return { ...m, timestamp: m.timestamp?.toDate ? m.timestamp.toDate().toISOString() : null };
+      });
+      downloadJson(`rivalry-backup-${rivalry.name.replace(/[^a-z0-9]+/gi, "-")}-${getTodayKey()}.json`, {
+        exportedAt: new Date().toISOString(),
+        rivalry: {
+          name: rivalry.name,
+          members: rivalry.members,
+          memberNames: rivalry.memberNames,
+          tasks: rivalry.tasks,
+          players: rivalry.players,
+        },
+        messages: msgs,
+      });
+      showFlash("Backup downloaded");
+    } catch (e) { console.error(e); showFlash("Backup failed", "info"); }
+    setManageBusy(false);
+  }
+
+  async function deleteRivalry() {
+    setManageBusy(true);
+    try {
+      // messages first, then invite, then the rivalry (rules need the rivalry to exist while deleting these)
+      const snap = await getDocs(collection(db, "rivalries", rivalryId, "messages"));
+      for (let i = 0; i < snap.docs.length; i += 400) {
+        const batch = writeBatch(db);
+        snap.docs.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+      }
+      await deleteDoc(doc(db, "invites", rivalryId));
+      await deleteDoc(rivalryRef);
+      onBack();
+    } catch (e) {
+      console.error(e);
+      showFlash("Delete failed. Publish the new rules first.", "info");
+      setManageBusy(false);
+    }
+  }
+
   async function saveName() {
     const n = tempName.trim();
     if (!n) return setSettingName(false);
@@ -740,7 +868,7 @@ function RivalryView({ rivalryId, user, myName, onBack }) {
     <div style={{ ...pageStyle, paddingBottom: 100 }}>
       {flash && (
         <div className="flash" style={{
-          position: "fixed", top: 20, left: "50%", transform: "translateX(-50%)", zIndex: 100,
+          position: "fixed", top: BAR_H + 14, left: "50%", transform: "translateX(-50%)", zIndex: 100,
           background: flash.type === "success" ? "#0d2a0d" : "#1a1a2a",
           border: `1px solid ${flash.type === "success" ? "#4dff91" : "#4d9fff"}`,
           color: flash.type === "success" ? "#4dff91" : "#4d9fff",
@@ -749,7 +877,7 @@ function RivalryView({ rivalryId, user, myName, onBack }) {
       )}
 
       {/* Header */}
-      <div style={{ background: "#0d0d0d", borderBottom: "1px solid #1e1e1e", padding: "16px 20px", position: "sticky", top: 0, zIndex: 10 }}>
+      <div style={{ background: "#0d0d0d", borderBottom: "1px solid #1e1e1e", padding: "16px 20px", position: "sticky", top: BAR_H, zIndex: 10 }}>
         <div style={{ maxWidth: 600, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <button onClick={onBack} style={{ background: "transparent", border: "none", color: "#555", cursor: "pointer", fontSize: 18, padding: 0 }}>←</button>
@@ -792,6 +920,10 @@ function RivalryView({ rivalryId, user, myName, onBack }) {
         )}
         <div style={{ maxWidth: 600, margin: "10px auto 0", fontSize: 10, color: "#333", letterSpacing: 3, textAlign: "center" }}>
           {rivalry.name.toUpperCase()}
+          <button onClick={() => { setConfirmText(""); setShowManage(true); }}
+            style={{ background: "transparent", border: "none", color: "#555", cursor: "pointer", fontFamily: "inherit", fontSize: 10, letterSpacing: 2, marginLeft: 12 }}>
+            ⚙ MANAGE
+          </button>
         </div>
       </div>
 
@@ -960,7 +1092,7 @@ function RivalryView({ rivalryId, user, myName, onBack }) {
 
         {/* CHAT TAB */}
         {activeTab === "chat" && (
-          <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 210px)" }}>
+          <div style={{ display: "flex", flexDirection: "column", height: `calc(100vh - ${210 + BAR_H + FOOTER_H}px)` }}>
             <div style={{ flex: 1, overflowY: "auto", padding: "16px", display: "flex", flexDirection: "column", gap: 10 }}>
               {waiting && <InviteBox rivalryId={rivalryId} rivalryName={rivalry.name} />}
               {messages.length === 0 && !waiting && (
@@ -970,24 +1102,27 @@ function RivalryView({ rivalryId, user, myName, onBack }) {
                   <div style={{ fontSize: 11, color: "#222", marginTop: 8 }}>Trash talk your rival!</div>
                 </div>
               )}
-              {messages.map((msg) => {
+              {messages.map((msg, i) => {
                 const isMe = msg.sender === uid;
-                if (msg.text?.startsWith("🔥")) {
-                  return (
-                    <div key={msg.id} style={{ display: "flex", justifyContent: "center" }}>
-                      <div className="msg-system">{msg.senderName}: {msg.text}</div>
-                    </div>
-                  );
-                }
+                const newDay = i === 0 || dayKeyOf(messages[i - 1].timestamp) !== dayKeyOf(msg.timestamp);
                 return (
-                  <div key={msg.id} style={{ display: "flex", flexDirection: "column", alignItems: isMe ? "flex-end" : "flex-start", gap: 4 }}>
-                    <div style={{ fontSize: 10, color: "#444", letterSpacing: 1, paddingInline: 4 }}>
-                      {msg.senderName} · {formatTime(msg.timestamp)}
-                    </div>
-                    <div className={`msg-bubble ${isMe ? "msg-me" : "msg-them"}`} style={{ color: isMe ? myColor : theirColor }}>
-                      {msg.text}
-                    </div>
-                  </div>
+                  <Fragment key={msg.id}>
+                    {newDay && <div className="day-pill">{dayLabel(msg.timestamp)}</div>}
+                    {msg.text?.startsWith("🔥") ? (
+                      <div style={{ display: "flex", justifyContent: "center" }}>
+                        <div className="msg-system">{msg.senderName}: {msg.text} · {formatTime(tsDate(msg.timestamp))}</div>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: isMe ? "flex-end" : "flex-start", gap: 4 }}>
+                        <div style={{ fontSize: 10, color: "#444", letterSpacing: 1, paddingInline: 4 }}>
+                          {msg.senderName} · {formatStamp(msg.timestamp)}
+                        </div>
+                        <div className={`msg-bubble ${isMe ? "msg-me" : "msg-them"}`} style={{ color: isMe ? myColor : theirColor }}>
+                          {msg.text}
+                        </div>
+                      </div>
+                    )}
+                  </Fragment>
                 );
               })}
               <div ref={chatEndRef} />
@@ -1032,6 +1167,29 @@ function RivalryView({ rivalryId, user, myName, onBack }) {
               <button className="action-btn" style={{ flex: 1 }} onClick={() => setShowAddTask(false)}>CANCEL</button>
               <button className="action-btn primary" style={{ flex: 1 }} onClick={addTask}>ADD TASK</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manage modal */}
+      {showManage && (
+        <div className="modal-bg" onClick={() => !manageBusy && setShowManage(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ margin: "0 0 20px", fontFamily: "'Black Han Sans', sans-serif", letterSpacing: 3 }}>⚙ MANAGE RIVALRY</h3>
+            <p style={{ color: "#555", fontSize: 11, letterSpacing: 2, margin: "0 0 10px" }}>SAVE A COPY</p>
+            <p style={{ color: "#777", fontSize: 12, lineHeight: 1.5, margin: "0 0 12px" }}>Download scores, tasks and the whole chat as a file you keep.</p>
+            <button className="action-btn primary" style={{ width: "100%", marginBottom: 24 }} onClick={exportBackup} disabled={manageBusy}>
+              {manageBusy ? "..." : "DOWNLOAD BACKUP"}
+            </button>
+            <p style={{ color: "#ff6b6b", fontSize: 11, letterSpacing: 2, margin: "0 0 10px" }}>DANGER ZONE</p>
+            <p style={{ color: "#777", fontSize: 12, lineHeight: 1.5, margin: "0 0 12px" }}>
+              Delete this rivalry for both players, with all scores and chat. Cannot undo. Type <b style={{ color: "#fff" }}>DELETE</b> to confirm.
+            </p>
+            <input className="input-full" placeholder="DELETE" value={confirmText} onChange={(e) => setConfirmText(e.target.value)} />
+            <button className="danger-btn" disabled={confirmText !== "DELETE" || manageBusy} onClick={deleteRivalry}>
+              {manageBusy ? "WORKING..." : "DELETE RIVALRY"}
+            </button>
+            <button className="action-btn" style={{ width: "100%", marginTop: 12 }} onClick={() => setShowManage(false)} disabled={manageBusy}>CLOSE</button>
           </div>
         </div>
       )}
@@ -1118,7 +1276,11 @@ export default function RivalryApp() {
   return (
     <>
       <style>{GLOBAL_CSS}</style>
-      {screen}
+      <div style={{ background: "#0a0a0a" }}>
+        <ClockBar />
+        {screen}
+        <Footer />
+      </div>
     </>
   );
 }
